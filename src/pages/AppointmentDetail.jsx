@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { appointmentAPI } from '../services/api';
 import {
     Container,
     Paper,
@@ -26,21 +25,38 @@ const AppointmentDetail = () => {
 
     useEffect(() => {
         const load = async () => {
-            const ref = doc(db, 'appointments', id);
-            const snap = await getDoc(ref);
-            if (snap.exists()) setAppointment({ id: snap.id, ...snap.data() });
-            setLoading(false);
+            try {
+                const res = await appointmentAPI.getById(id);
+                const data = res.data;
+                // Normalize status and fields for compatibility with the view
+                const normalized = {
+                    ...data,
+                    patientName: data.patient_name || data.patientName || 'Anonymous Patient',
+                    doctorName: data.doctor_name || data.doctorName || 'Anonymous Doctor',
+                    day: data.slot_details?.day || data.day || data.slot_details?.date || '',
+                    time: data.slot_details?.time || data.time || '',
+                    status: data.status === 'Confirmed' ? 'Approved' : data.status,
+                };
+                setAppointment(normalized);
+                if (data.diagnosis) setDiagnosis(data.diagnosis);
+                if (data.prescription) setPrescription(data.prescription);
+            } catch (err) {
+                console.error(err);
+                Swal.fire('Failed to load appointment details', '', 'error');
+            } finally {
+                setLoading(false);
+            }
         };
         load();
     }, [id]);
 
     const handleApprove = async () => {
         try {
-            const ref = doc(db, 'appointments', id);
-            await updateDoc(ref, { status: 'Approved' });
-            if (appointment?.patientId)
+            await appointmentAPI.approveAppointment(id);
+            const patientId = appointment?.patient || appointment?.patientId;
+            if (patientId)
                 await sendNotification(
-                    appointment.patientId,
+                    patientId,
                     'Appointment approved',
                     'Your appointment was approved.',
                     { appointmentId: id }
@@ -55,11 +71,11 @@ const AppointmentDetail = () => {
 
     const handleCancel = async () => {
         try {
-            const ref = doc(db, 'appointments', id);
-            await updateDoc(ref, { status: 'Cancelled' });
-            if (appointment?.patientId)
+            await appointmentAPI.cancelAppointment(id, 'Cancelled via Appointment Details');
+            const patientId = appointment?.patient || appointment?.patientId;
+            if (patientId)
                 await sendNotification(
-                    appointment.patientId,
+                    patientId,
                     'Appointment cancelled',
                     'Your appointment was cancelled.',
                     { appointmentId: id }
@@ -78,18 +94,14 @@ const AppointmentDetail = () => {
             return;
         }
         try {
-            const ref = doc(db, 'appointments', id);
-            await updateDoc(ref, {
-                status: 'Completed',
-                medicalRecord: {
-                    diagnosis,
-                    prescription,
-                    date: new Date().toLocaleDateString(),
-                },
+            await appointmentAPI.completeAppointment(id, {
+                diagnosis,
+                prescription,
             });
-            if (appointment?.patientId)
+            const patientId = appointment?.patient || appointment?.patientId;
+            if (patientId)
                 await sendNotification(
-                    appointment.patientId,
+                    patientId,
                     'Visit completed',
                     'Your visit was completed and prescription is available.',
                     { appointmentId: id }
